@@ -23,20 +23,16 @@ class FirewallManager
         $This.TrustedOwners.Add("NT AUTHORITY\SYSTEM")
     }
 
-    [void] WhitelistUsedApps([Bool] $FbWhitelist){
+    [void] WhitelistUsedApps([Bool] $FbWhitelist)
+    {
         $LvUsedApps = [List[string]]::new()
-        foreach($LoOut in $($(Get-NetTCPConnection | ForEach-Object { 
-                $process = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
-                if ($process) {
-                    [PSCustomObject]@{
-                        Path = $process.Path
-                    }
-                }
-            } | Sort-Object -Property Path -Unique)))
-        {
-            $LvUsedApps.Add($LoOut.Path)
+
+        foreach($LoProcess in Get-Process){
+            $LvUsedApps.Add($LoProcess.Path)
         }
-        
+
+        $UniqueApps = [HashSet[String]]::new($LvUsedApps)
+
         $ApproveAppsPath = "$PSScriptRoot\Config\ApprovedApps.txt"
         $DenyAppsPath    = "$PSScriptRoot\Config\DenyApps.txt"
         if (!(Test-Path $ApproveAppsPath)){ 
@@ -72,28 +68,26 @@ class FirewallManager
 
         Write-Host "`n`n"
         $LbNewConnection = $false
-        foreach ($LsFullPath in $LvUsedApps) {
+        foreach ($LsFullPath in $UniqueApps) {
             if (!(Test-Path $LsFullPath)){ 
                 continue
             }
             if (($LvApprovedApps -notcontains $LsFullPath) -and ($LvDenyedApps -notcontains $LsFullPath)) {
+                $LbNewConnection = $true
                 if($FbWhitelist){
                     Add-Content -Path $ApproveAppsPath -Value $LsFullPath
                     $LvTargets.Add([Target]::new($LsFullPath))
                 }else {
-                    Write-Host "New App: $LsFullPath"
-                    $LbNewConnection = $true
+                    Write-Host $LsFullPath
                 }
             }
         }
 
-        if (!$FbWhitelist -and !$LbNewConnection){
+        if ($LbNewConnection -eq $false){
             Write-Host "No New Connections!!"
         }
         elseif ($FbWhitelist -and $LvTargets.Count -gt 0) {
             $this.WhitelistTargets($LvTargets)
-        }else{
-            Write-Host "No New Connections!!"
         }
 
         Write-Host "`n`n"
@@ -154,6 +148,9 @@ class FirewallManager
     [void] WhitelistTargets([List[Target]] $FoTargets)
     {
         foreach ($LoTarget in $FoTargets){
+            if ($LoTarget.Path.Length -eq 0){
+                continue
+            }
             if ($this.TrustedOwners -contains $LoTarget.Owner) {
                 $LoTarget.whitelist()
             }

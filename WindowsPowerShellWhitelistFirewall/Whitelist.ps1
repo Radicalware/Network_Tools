@@ -8,7 +8,7 @@ param(
     [switch]$TurnOFF,
     [switch]$CleanupWinSxS, # should run at least once
     [switch]$WhitelistUsedApps,
-    [switch]$ViewNewConnections,
+    [switch]$ViewServices,
     [switch]$WhitelistAllStandards,
     [switch]$WhitelistWindowsCore,
     [switch]$WhitelistWindowsServices,
@@ -78,7 +78,7 @@ if($CleanupWinSxS)            { $FirewallManager.CleanupWinSxS() }
 if($WhitelistWindowsCore)     { $FirewallManager.WhitelistWindowsByTrustedOwnership() }
 if($WhitelistWindowsServices) { $FirewallManager.WhitelisMicrosoftServices() }
 if($WhitelistUsedApps)        { $FirewallManager.WhitelistUsedApps($true) }
-if($ViewNewConnections)       { $FirewallManager.WhitelistUsedApps($false) }
+if($ViewServices)             { $FirewallManager.WhitelistUsedApps($false) }
 
 if($WhitelistProgramFilesAndApps)
 {
