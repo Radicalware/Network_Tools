@@ -4,17 +4,18 @@ Using module ".\IFirewall\FirewallManager.psm1"
 using namespace System.Collections.Generic
 
 param(
-    [switch]$OnlySetWhitelist,
+    [switch]$TurnON, # on by default
+    [switch]$TurnOFF,
+    [switch]$CleanupWinSxS, # should run at least once
+    [switch]$WhitelistUsedApps,
+    [switch]$ViewNewConnections,
     [switch]$WhitelistAllStandards,
     [switch]$WhitelistWindowsCore,
     [switch]$WhitelistWindowsServices,
     [switch]$CleanOutDuplicates,
     [switch]$WhitelistProgramFilesAndApps,
-    [switch]$CleanupWinSxS,
     [string]$WhitelistFolder,
-    [string]$WhitelistFile,
-    [switch]$TurnON,
-    [switch]$TurnOFF
+    [string]$WhitelistFile
 )
 # $ErrorActionPreference = "Stop"
 Import-Module Microsoft.PowerShell.Utility -Force
@@ -59,36 +60,44 @@ $PSBoundParameters.GetEnumerator() | ForEach-Object {
 $FirewallManager = [FirewallManager]::new()
 # $FirewallManager = Get-FirewallManager
 
-if ($TurnON){
+if ($TurnOff -ne $true){ # default is turn on
+    Write-Host "FirewallManager: Setting firewall policy to block all inbound and outbound traffic"
     $FirewallManager.TurnOn()
+}
+if ($TurnOn){ # exit early if we explicity just want to turn on
     return
 }
 
 if ($TurnOFF){
+    Write-Host "FirewallManager: Setting firewall policy to block all inbound and outbound traffic"
     $FirewallManager.TurnOFF()
     return
 }
 
-if ($OnlySetWhitelist -ne $true)
-{
-    if($CleanupWinSxS)            { $FirewallManager.CleanupWinSxS() }
-    if($WhitelistWindowsCore)     { $FirewallManager.WhitelistWindowsByTrustedOwnership() }
-    if($WhitelistWindowsServices) { $FirewallManager.WhitelisMicrosoftServices() }
+if($CleanupWinSxS)            { $FirewallManager.CleanupWinSxS() }
+if($WhitelistWindowsCore)     { $FirewallManager.WhitelistWindowsByTrustedOwnership() }
+if($WhitelistWindowsServices) { $FirewallManager.WhitelisMicrosoftServices() }
+if($WhitelistUsedApps)        { $FirewallManager.WhitelistUsedApps($true) }
+if($ViewNewConnections)       { $FirewallManager.WhitelistUsedApps($false) }
 
-    if($WhitelistProgramFilesAndApps)
-    {
-        $FirewallManager.WhitelistByFolderAndOwnership("C:\program files")
-        $FirewallManager.WhitelistByFolderAndOwnership("C:\program files (x86)")
-        $FirewallManager.WhitelistByFolderAndOwnership("C:\Program Files\WindowsApps") # Hidden Folder
-    }
-    $MyOwnership = "$env:COMPUTERNAME\$env:USERNAME"
-    $Owners = [List[string]]::new()
-    $Owners.Add($MyOwnership)
-    if($WhitelistFolder.Length -gt 0){ $FirewallManager.WhitelistByFolderAndOwnership($WhitelistFolder, $Owners) }
-    if($WhitelistFile.Length   -gt 0){ $FirewallManager.WhitelistFile($WhitelistFile) }
+if($WhitelistProgramFilesAndApps)
+{
+    $FirewallManager.WhitelistByFolderAndOwnership("C:\program files")
+    $FirewallManager.WhitelistByFolderAndOwnership("C:\program files (x86)")
+    $FirewallManager.WhitelistByFolderAndOwnership("C:\Program Files\WindowsApps") # Hidden Folder
 }
+$MyOwnership = "$env:COMPUTERNAME\$env:USERNAME"
+$Owners = [List[string]]::new()
+$Owners.Add($MyOwnership)
+if($WhitelistFolder.Length -gt 0){ $FirewallManager.WhitelistByFolderAndOwnership($WhitelistFolder, $Owners) }
+if($WhitelistFile.Length   -gt 0){ $FirewallManager.WhitelistFile($WhitelistFile) }
+
 
 if($CleanOutDuplicates){ $firewallmanager.CleanOutFirewallDuplicates() }
 
 Write-Host "Finished Whitelisting!!"
 
+
+# Get-NetFirewallRule | Where-Object { $_.DisplayName -like "*`.dll" }  | Select-Object -First 5
+
+# Remove-NetFirewallRule

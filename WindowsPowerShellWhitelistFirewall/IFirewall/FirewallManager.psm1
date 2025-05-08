@@ -5,7 +5,9 @@ Write-Host "Imported Firewall"
 
 class FirewallManager 
 {
-    static [string] $SsDirSplitPattern = "^(.*)\\([^\\]+\.(exe|dll|bat|ps1))" 
+    static [string] $SsDirSplitPattern = "^(.*)\\([^\\]+\.(exe|dll|bat|ps1))$" 
+    static [string] $SsExteions        =            "^.*\.(exe)$" 
+    #static [string] $SsExteions        =            "^.*\.(exe|dll|bat|ps1)$" 
 
     [List[string]]$TrustedOwners = [List[string]]::new()
 
@@ -15,11 +17,87 @@ class FirewallManager
     }
     FirewallManager() {
         Import-Module -Name "$PSScriptRoot\Target.psm1" -Force
-        Write-Host "FirewallManager: Setting firewall policy to block all inbound and outbound traffic"
         Set-NetFirewallProfile -Profile Domain,Private,Public -DefaultInboundAction Block -DefaultOutboundAction Block
         $This.TrustedOwners.Add("NT SERVICE\TrustedInstaller")
         $This.TrustedOwners.Add("BUILTIN\Administrators")
         $This.TrustedOwners.Add("NT AUTHORITY\SYSTEM")
+    }
+
+    [void] WhitelistUsedApps([Bool] $FbWhitelist){
+        $LvUsedApps = [List[string]]::new()
+        foreach($LoOut in $($(Get-NetTCPConnection | ForEach-Object { 
+                $process = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+                if ($process) {
+                    [PSCustomObject]@{
+                        Path = $process.Path
+                    }
+                }
+            } | Sort-Object -Property Path -Unique)))
+        {
+            $LvUsedApps.Add($LoOut.Path)
+        }
+        
+        $ApproveAppsPath = "$PSScriptRoot\Config\ApprovedApps.txt"
+        $DenyAppsPath    = "$PSScriptRoot\Config\DenyApps.txt"
+        if (!(Test-Path $ApproveAppsPath)){ 
+            New-Item -ItemType File -Path $ApproveAppsPath -Force 
+        }
+        if (!(Test-Path $DenyAppsPath)){ 
+            New-Item -ItemType File -Path $DenyAppsPath -Force 
+        }
+        
+        $LsApprovedApps = $(Get-Content $ApproveAppsPath)
+        $LvApprovedApps = @()
+        if ($null -ne $LsApprovedApps)
+        {
+            if ($LsApprovedApps.Contains("`n")){
+                $LvApprovedApps = $LsApprovedApps.split("`n")
+            } elseif ($LsApprovedApps.Length -gt 0){
+                $LvApprovedApps += $LsApprovedApps
+            }
+        }
+
+        $LsDenyedApps = $(Get-Content $DenyAppsPath)
+        $LvDenyedApps = @()
+        if ($null -ne $LsDenyedApps)
+        {
+            if($LsDenyedApps.Contains("`n")){
+                $LvDenyedApps = $LsDenyedApps.split("`n")
+            } elseif ($LsDenyedApps.Length -gt 0){
+                $LvDenyedApps += $LsDenyedApps
+            }
+        }
+
+        $LvTargets = [List[Target]]::new()
+
+        Write-Host "`n`n"
+        $LbNewConnection = $false
+        foreach ($LsFullPath in $LvUsedApps) {
+            if (!(Test-Path $LsFullPath)){ 
+                continue
+            }
+            if (($LvApprovedApps -notcontains $LsFullPath) -and ($LvDenyedApps -notcontains $LsFullPath)) {
+                if($FbWhitelist){
+                    Add-Content -Path $ApproveAppsPath -Value $LsFullPath
+                    $LvTargets.Add([Target]::new($LsFullPath))
+                }else {
+                    Write-Host "New App: $LsFullPath"
+                    $LbNewConnection = $true
+                }
+            }
+        }
+
+        if (!$FbWhitelist -and !$LbNewConnection){
+            Write-Host "No New Connections!!"
+        }
+        elseif ($FbWhitelist -and $LvTargets.Count -gt 0) {
+            $this.WhitelistTargets($LvTargets)
+        }else{
+            Write-Host "No New Connections!!"
+        }
+
+        Write-Host "`n`n"
+        Write-Host "Updated: $ApproveAppsPath"
     }
 
     [void] TurnOn()
@@ -45,30 +123,9 @@ class FirewallManager
         }
     }
 
-    [void] WhitelistFile([string]$RuleName, [string]$ProgramPath) 
+    [void] WhitelistFile([string]$ProgramPath) 
     {
-        Write-Host "Name: $RuleName"
-        Write-Host "Path: $ProgramPath"
-        Write-Host ""
-    
-        # Add inbound rule
-        New-NetFirewallRule -DisplayName "$RuleName In - $($ProgramPath)" `
-                            -Direction Inbound `
-                            -Action Allow `
-                            -Program $ProgramPath `
-                            -Enabled True
-    
-        # Add outbound rule
-        New-NetFirewallRule -DisplayName "$RuleName Out - $($ProgramPath)" `
-                            -Direction Outbound `
-                            -Action Allow `
-                            -Program $ProgramPath `
-                            -Enabled True
-    }
-
-    [void] WhitelistTarget([Target]$Target) 
-    {
-        $This.WhitelistFile($Target.Name, $Target.Path)
+        [Target]::new($ProgramPath).Whitelist()
     }
 
     [void] WhitelistFolder([string]$RuleName, [string]$ProgramDir) 
@@ -97,10 +154,13 @@ class FirewallManager
     [void] WhitelistTargets([List[Target]] $FoTargets)
     {
         foreach ($LoTarget in $FoTargets){
-            $this.WhitelistFile(
-                $LoTarget.Name, 
-                $this.ExtractPath($LoTarget.Path)
-            )
+            if ($this.TrustedOwners -contains $LoTarget.Owner) {
+                $LoTarget.whitelist()
+            }
+            else{
+                Write-Host "Unsafe Owner = $($this.$LoTarget.Owner)"
+                write-Host $this.$LoTarget
+            }
         }
     }
 
@@ -111,10 +171,10 @@ class FirewallManager
         $(Get-WmiObject Win32_Service) | ForEach-Object {
             $ServicePath = $This.ExtractPath($_.PathName)
             $LoDirConfig = $This.GetPathSplit($ServicePath)
-            $Directory = $LoDirConfig[0]
-            $Path = $LoDirConfig[1]
-            $EXE = $LoDirConfig[2]
-            $MSServices.Add([Target]::new($EXE, $Path, $Directory))
+            $FullPath = $LoDirConfig[0]
+            # $Dir = $LoDirConfig[1]
+            # $EXE = $LoDirConfig[2]
+            $MSServices.Add([Target]::new($FullPath))
         }
         
         $LvEnumerable = [System.Linq.Enumerable]::Distinct($MSServices)
@@ -134,10 +194,10 @@ class FirewallManager
         foreach ($LsOwner in $this.TrustedOwners){
             $LvAllOnwers.Add($LsOwner)
         }
-        $ExeFiles = Get-ChildItem -Path $BasePath -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
+        $ExeFiles = Get-ChildItem -Path $BasePath -Recurse | Where-Object { $_.Name -match [FirewallManager]::SsExteions }
         $FullTargetLine = [List[Target]]::new()
         foreach ($File in $ExeFiles) {
-            $FullTargetLine.Add([Target]::new($File.Name, $File.FullName, $File.DirectoryName))
+            $FullTargetLine.Add([Target]::new($File.FullName))
         }
 
         if ($FullTargetLine.Count -lt 1){
